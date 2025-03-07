@@ -236,6 +236,7 @@ bool smf_nsmf_handle_create_sm_context(
     sess->s_nssai.sst = sNssai->sst;
     sess->s_nssai.sd = ogs_s_nssai_sd_from_string(sNssai->sd);
     if (SmContextCreateData->hplmn_snssai) {
+        sess->mapped_hplmn_presence = true;
         sess->mapped_hplmn.sst = SmContextCreateData->hplmn_snssai->sst;
         sess->mapped_hplmn.sd = ogs_s_nssai_sd_from_string(
                                     SmContextCreateData->hplmn_snssai->sd);
@@ -991,6 +992,6 @@ cleanup:
     ogs_assert(response);
     ogs_assert(true == ogs_sbi_server_send_response(stream, response));
 
-    return OGS_OK;
+    return true;
 }
 

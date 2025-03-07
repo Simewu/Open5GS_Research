@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2025 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -1286,6 +1286,12 @@ int gmm_handle_ul_nas_transport(ran_ue_t *ran_ue, amf_ue_t *amf_ue,
                     if (ogs_nas_parse_s_nssai(&ie, nas_s_nssai) != 0) {
                         if (ie.sst == amf_ue->slice[i].s_nssai.sst &&
                             ie.sd.v == amf_ue->slice[i].s_nssai.sd.v) {
+
+                            if (ie.mapped_hplmn_sst_presence) {
+                                sess->mapped_hplmn_presence = true;
+                                sess->mapped_hplmn.sst = ie.mapped_hplmn_sst;
+                                sess->mapped_hplmn.sd.v = ie.mapped_hplmn_sd.v;
+                            }
 
                             /* PASS */
 

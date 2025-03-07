@@ -379,6 +379,7 @@ typedef struct smf_sess_s {
     /* S_NSSAI */
     ogs_s_nssai_t s_nssai;
     ogs_s_nssai_t mapped_hplmn;
+    bool mapped_hplmn_presence;
 
     /* PDN Configuration */
     ogs_session_t session;
@@ -485,6 +486,12 @@ typedef struct smf_sess_s {
     struct {
         uint32_t id;
     } charging;
+
+    /* AAA Node Identifier */
+    struct {
+        char *name;
+        char *realm;
+    } aaa_server_identifier;
 
     /* Data Forwarding between the CP and UP functions */
     ogs_pfcp_pdr_t  *cp2up_pdr;

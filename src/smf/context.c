@@ -53,9 +53,11 @@ int smf_use_gy_iface(void)
 {
     switch (smf_self()->ctf_config.enabled) {
     case SMF_CTF_ENABLED_AUTO:
-        return ogs_diam_app_connected(OGS_DIAM_GY_APPLICATION_ID) ? 1 : 0;
+        return ogs_diam_is_relay_or_app_advertised(
+                OGS_DIAM_GY_APPLICATION_ID) ? 1 : 0;
     case SMF_CTF_ENABLED_YES:
-        return ogs_diam_app_connected(OGS_DIAM_GY_APPLICATION_ID) ? 1 : -1;
+        return ogs_diam_is_relay_or_app_advertised(
+                OGS_DIAM_GY_APPLICATION_ID) ? 1 : -1;
     case SMF_CTF_ENABLED_NO:
         return 0;
     default:
@@ -704,7 +706,7 @@ int smf_context_parse_config(void)
                                         s_nssai->sst = atoi(sst);
                                         if (sd)
                                             s_nssai->sd =
-                                                ogs_uint24_from_string(
+                                                ogs_uint24_from_string_hexadecimal(
                                                         (char*)sd);
                                         else
                                             s_nssai->sd.v =
@@ -1182,8 +1184,6 @@ static ogs_pfcp_node_t *selected_upf_node(
 
 void smf_sess_select_upf(smf_sess_t *sess)
 {
-    char buf[OGS_ADDRSTRLEN];
-
     ogs_assert(sess);
 
     /*
@@ -1199,8 +1199,9 @@ void smf_sess_select_upf(smf_sess_t *sess)
         selected_upf_node(ogs_pfcp_self()->pfcp_node, sess);
     ogs_assert(ogs_pfcp_self()->pfcp_node);
     OGS_SETUP_PFCP_NODE(sess, ogs_pfcp_self()->pfcp_node);
-    ogs_debug("UE using UPF on IP[%s]",
-            OGS_ADDR(&ogs_pfcp_self()->pfcp_node->addr, buf));
+    ogs_debug("UE using UPF on IP %s",
+            ogs_sockaddr_to_string_static(
+                ogs_pfcp_self()->pfcp_node->addr_list));
 }
 
 smf_sess_t *smf_sess_add_by_apn(smf_ue_t *smf_ue, char *apn, uint8_t rat_type)
@@ -1478,6 +1479,7 @@ smf_sess_t *smf_sess_add_by_psi(smf_ue_t *smf_ue, uint8_t psi)
 
     ogs_list_add(&smf_ue->sess_list, sess);
 
+    smf_metrics_inst_global_inc(SMF_METR_GLOB_GAUGE_PFCP_SESSIONS_ACTIVE);
     stats_add_smf_session();
 
     return sess;
@@ -1608,7 +1610,7 @@ uint8_t smf_sess_set_ue_ip(smf_sess_t *sess)
         subnet6 = sess->ipv6->subnet;
         ogs_assert(subnet6);
 
-        sess->paa.len = OGS_IPV6_DEFAULT_PREFIX_LEN >> 3;
+        sess->paa.len = OGS_IPV6_DEFAULT_PREFIX_LEN;
         memcpy(sess->paa.addr6, sess->ipv6->addr, OGS_IPV6_LEN);
         ogs_hash_set(smf_self()->ipv6_hash,
                 sess->ipv6->addr, OGS_IPV6_DEFAULT_PREFIX_LEN >> 3, sess);
@@ -1637,7 +1639,7 @@ uint8_t smf_sess_set_ue_ip(smf_sess_t *sess)
         ogs_assert(subnet6);
 
         sess->paa.both.addr = sess->ipv4->addr[0];
-        sess->paa.both.len = OGS_IPV6_DEFAULT_PREFIX_LEN >> 3;
+        sess->paa.both.len = OGS_IPV6_DEFAULT_PREFIX_LEN;
         memcpy(sess->paa.both.addr6, sess->ipv6->addr, OGS_IPV6_LEN);
         ogs_hash_set(smf_self()->ipv4_hash,
                 sess->ipv4->addr, OGS_IPV4_LEN, sess);
@@ -1791,6 +1793,11 @@ void smf_sess_remove(smf_sess_t *sess)
     /* Free SBI object memory */
     ogs_sbi_object_free(&sess->sbi);
 
+    if (sess->aaa_server_identifier.name)
+        ogs_free(sess->aaa_server_identifier.name);
+    if (sess->aaa_server_identifier.realm)
+        ogs_free(sess->aaa_server_identifier.realm);
+
     smf_bearer_remove_all(sess);
 
     ogs_assert(sess->pfcp.bar);
@@ -1810,6 +1817,7 @@ void smf_sess_remove(smf_sess_t *sess)
         smf_metrics_inst_global_dec(SMF_METR_GLOB_GAUGE_GTP2_SESSIONS_ACTIVE);
         break;
     }
+    smf_metrics_inst_global_dec(SMF_METR_GLOB_GAUGE_PFCP_SESSIONS_ACTIVE);
     stats_remove_smf_session(sess);
 
     ogs_pool_free(&smf_n4_seid_pool, sess->smf_n4_seid_node);
@@ -1955,6 +1963,9 @@ smf_bearer_t *smf_qos_flow_add(smf_sess_t *sess)
 
     dl_pdr->src_if = OGS_PFCP_INTERFACE_CORE;
 
+    dl_pdr->src_if_type_presence = true;
+    dl_pdr->src_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N6;
+
     ul_pdr = ogs_pfcp_pdr_add(&sess->pfcp);
     ogs_assert(ul_pdr);
     qos_flow->ul_pdr = ul_pdr;
@@ -1965,7 +1976,10 @@ smf_bearer_t *smf_qos_flow_add(smf_sess_t *sess)
 
     ul_pdr->src_if = OGS_PFCP_INTERFACE_ACCESS;
 
-    ul_pdr->outer_header_removal_len = 2;
+    ul_pdr->src_if_type_presence = true;
+    ul_pdr->src_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N3_3GPP_ACCESS;
+
+    ul_pdr->outer_header_removal_len = 1;
     if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4) {
         ul_pdr->outer_header_removal.description =
             OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IPV4;
@@ -1975,10 +1989,10 @@ smf_bearer_t *smf_qos_flow_add(smf_sess_t *sess)
     } else if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4V6) {
         ul_pdr->outer_header_removal.description =
             OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IP;
-    } else
+    } else {
+        ogs_error("Invalid session_type [%d]", sess->session.session_type);
         ogs_assert_if_reached();
-    ul_pdr->outer_header_removal.gtpu_extheader_deletion =
-        OGS_PFCP_PDU_SESSION_CONTAINER_TO_BE_DELETED;
+    }
 
     /* FAR */
     dl_far = ogs_pfcp_far_add(&sess->pfcp);
@@ -1990,6 +2004,10 @@ smf_bearer_t *smf_qos_flow_add(smf_sess_t *sess)
     ogs_assert(dl_far->apn);
 
     dl_far->dst_if = OGS_PFCP_INTERFACE_ACCESS;
+
+    dl_far->dst_if_type_presence = true;
+    dl_far->dst_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N3_3GPP_ACCESS;
+
     ogs_pfcp_pdr_associate_far(dl_pdr, dl_far);
 
     dl_far->apply_action =
@@ -2005,6 +2023,10 @@ smf_bearer_t *smf_qos_flow_add(smf_sess_t *sess)
     ogs_assert(ul_far->apn);
 
     ul_far->dst_if = OGS_PFCP_INTERFACE_CORE;
+
+    ul_far->dst_if_type_presence = true;
+    ul_far->dst_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N6;
+
     ogs_pfcp_pdr_associate_far(ul_pdr, ul_far);
 
     ul_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
@@ -2067,6 +2089,10 @@ void smf_sess_create_indirect_data_forwarding(smf_sess_t *sess)
 
         pdr->src_if = OGS_PFCP_INTERFACE_ACCESS;
 
+        pdr->src_if_type_presence = true;
+        pdr->src_if_type =
+            OGS_PFCP_3GPP_INTERFACE_TYPE_SGW_UPF_GTP_U_FOR_UL_DATA_FORWARDING;
+
         pdr->outer_header_removal_len = 1;
         if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4) {
             pdr->outer_header_removal.description =
@@ -2077,8 +2103,10 @@ void smf_sess_create_indirect_data_forwarding(smf_sess_t *sess)
         } else if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4V6) {
             pdr->outer_header_removal.description =
                 OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IP;
-        } else
+        } else {
+            ogs_error("Invalid session_type [%d]", sess->session.session_type);
             ogs_assert_if_reached();
+        }
 
         far = ogs_pfcp_far_add(&sess->pfcp);
         ogs_assert(far);
@@ -2088,6 +2116,11 @@ void smf_sess_create_indirect_data_forwarding(smf_sess_t *sess)
         ogs_assert(far->apn);
 
         far->dst_if = OGS_PFCP_INTERFACE_ACCESS;
+
+        far->dst_if_type_presence = true;
+        far->dst_if_type =
+            OGS_PFCP_3GPP_INTERFACE_TYPE_SGW_UPF_GTP_U_FOR_DL_DATA_FORWARDING;
+
         ogs_pfcp_pdr_associate_far(pdr, far);
 
         far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
@@ -2154,14 +2187,16 @@ void smf_sess_create_indirect_data_forwarding(smf_sess_t *sess)
                     else
                         sess->handover.upf_dl_teid = pdr->teid;
                 } else {
-                    if (sess->pfcp_node->addr.ogs_sa_family == AF_INET)
+                    ogs_assert(sess->pfcp_node->addr_list);
+                    if (sess->pfcp_node->addr_list->ogs_sa_family == AF_INET)
                         ogs_assert(OGS_OK == ogs_copyaddrinfo(
                             &sess->handover.upf_dl_addr,
-                            &sess->pfcp_node->addr));
-                    else if (sess->pfcp_node->addr.ogs_sa_family == AF_INET6)
+                            sess->pfcp_node->addr_list));
+                    else if (sess->pfcp_node->addr_list->ogs_sa_family ==
+                            AF_INET6)
                         ogs_assert(OGS_OK == ogs_copyaddrinfo(
                             &sess->handover.upf_dl_addr6,
-                            &sess->pfcp_node->addr));
+                            sess->pfcp_node->addr_list));
                     else
                         ogs_assert_if_reached();
 
@@ -2238,6 +2273,7 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
     ogs_pfcp_far_t *up2cp_far = NULL;
 
     ogs_assert(sess);
+    ogs_assert(sess->session.name);
 
     smf_sess_delete_cp_up_data_forwarding(sess);
 
@@ -2245,9 +2281,10 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
     ogs_assert(cp2up_pdr);
     sess->cp2up_pdr = cp2up_pdr;
 
-    ogs_assert(sess->session.name);
-    cp2up_pdr->apn = ogs_strdup(sess->session.name);
-    ogs_assert(cp2up_pdr->apn);
+    if (ogs_global_conf()->parameter.use_upg_vpp == true) {
+        cp2up_pdr->apn = ogs_strdup(sess->session.name);
+        ogs_assert(cp2up_pdr->apn);
+    }
 
     cp2up_pdr->src_if = OGS_PFCP_INTERFACE_CP_FUNCTION;
 
@@ -2261,18 +2298,22 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
     } else if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4V6) {
         cp2up_pdr->outer_header_removal.description =
             OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IP;
-    } else
+    } else {
+        ogs_error("Invalid session_type [%d]", sess->session.session_type);
         ogs_assert_if_reached();
+    }
 
     up2cp_pdr = ogs_pfcp_pdr_add(&sess->pfcp);
     ogs_assert(up2cp_pdr);
     sess->up2cp_pdr = up2cp_pdr;
 
-    ogs_assert(sess->session.name);
     up2cp_pdr->apn = ogs_strdup(sess->session.name);
     ogs_assert(up2cp_pdr->apn);
 
     up2cp_pdr->src_if = OGS_PFCP_INTERFACE_ACCESS;
+
+    up2cp_pdr->src_if_type_presence = true;
+    up2cp_pdr->src_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N3_3GPP_ACCESS;
 
     up2cp_pdr->outer_header_removal_len = 1;
     if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4) {
@@ -2284,8 +2325,10 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
     } else if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4V6) {
         up2cp_pdr->outer_header_removal.description =
             OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IP;
-    } else
+    } else {
+        ogs_error("Invalid session_type [%d]", sess->session.session_type);
         ogs_assert_if_reached();
+    }
 
     qos_flow = smf_default_bearer_in_sess(sess);
     ogs_assert(qos_flow);
@@ -2301,15 +2344,23 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
     ogs_assert(up2cp_far);
     sess->up2cp_far = up2cp_far;
 
-    ogs_assert(sess->session.name);
-    up2cp_far->apn = ogs_strdup(sess->session.name);
-    ogs_assert(up2cp_far->apn);
+    if (ogs_global_conf()->parameter.use_upg_vpp == true) {
+        up2cp_far->apn = ogs_strdup(sess->session.name);
+        ogs_assert(up2cp_far->apn);
+    }
 
     up2cp_far->dst_if = OGS_PFCP_INTERFACE_CP_FUNCTION;
     ogs_pfcp_pdr_associate_far(up2cp_pdr, up2cp_far);
 
     up2cp_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
 
+#if 0
+    /*
+     * MODIFIED the PDI matching for UP2CP
+     * to not distinguish the QoS Flow Identifier.
+     *
+     * When omitted, the UPF was also adjusted to not compare the QFI.
+     */
     if (qos_flow->qer && qos_flow->qfi) {
         /* To match the PDI of UP2CP_PDR(from ff02::2/128 to assigned)
          * Router-Solicitation has QFI in the Extended Header */
@@ -2319,6 +2370,7 @@ void smf_sess_create_cp_up_data_forwarding(smf_sess_t *sess)
          * it includes QFI in extension header */
         ogs_pfcp_pdr_associate_qer(cp2up_pdr, qos_flow->qer);
     }
+#endif
 }
 
 void smf_sess_delete_cp_up_data_forwarding(smf_sess_t *sess)
@@ -2395,6 +2447,9 @@ smf_bearer_t *smf_bearer_add(smf_sess_t *sess)
 
     dl_pdr->src_if = OGS_PFCP_INTERFACE_CORE;
 
+    dl_pdr->src_if_type_presence = true;
+    dl_pdr->src_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N6;
+
     ul_pdr = ogs_pfcp_pdr_add(&sess->pfcp);
     ogs_assert(ul_pdr);
     bearer->ul_pdr = ul_pdr;
@@ -2404,6 +2459,9 @@ smf_bearer_t *smf_bearer_add(smf_sess_t *sess)
     ogs_assert(ul_pdr->apn);
 
     ul_pdr->src_if = OGS_PFCP_INTERFACE_ACCESS;
+
+    ul_pdr->src_if_type_presence = true;
+    ul_pdr->src_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N3_3GPP_ACCESS;
 
     ul_pdr->outer_header_removal_len = 1;
     if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4) {
@@ -2415,8 +2473,10 @@ smf_bearer_t *smf_bearer_add(smf_sess_t *sess)
     } else if (sess->session.session_type == OGS_PDU_SESSION_TYPE_IPV4V6) {
         ul_pdr->outer_header_removal.description =
             OGS_PFCP_OUTER_HEADER_REMOVAL_GTPU_UDP_IP;
-    } else
+    } else {
+        ogs_error("Invalid session_type [%d]", sess->session.session_type);
         ogs_assert_if_reached();
+    }
 
     /* FAR */
     dl_far = ogs_pfcp_far_add(&sess->pfcp);
@@ -2428,6 +2488,10 @@ smf_bearer_t *smf_bearer_add(smf_sess_t *sess)
     ogs_assert(dl_far->apn);
 
     dl_far->dst_if = OGS_PFCP_INTERFACE_ACCESS;
+
+    dl_far->dst_if_type_presence = true;
+    dl_far->dst_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N3_3GPP_ACCESS;
+
     ogs_pfcp_pdr_associate_far(dl_pdr, dl_far);
 
     dl_far->apply_action =
@@ -2443,6 +2507,10 @@ smf_bearer_t *smf_bearer_add(smf_sess_t *sess)
     ogs_assert(ul_far->apn);
 
     ul_far->dst_if = OGS_PFCP_INTERFACE_CORE;
+
+    ul_far->dst_if_type_presence = true;
+    ul_far->dst_if_type = OGS_PFCP_3GPP_INTERFACE_TYPE_N6;
+
     ogs_pfcp_pdr_associate_far(ul_pdr, ul_far);
 
     ul_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
@@ -3053,7 +3121,10 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
             /* TODO */
             break;
         case OGS_PCO_ID_MS_SUPPORT_LOCAL_ADDR_TFT_INDICATOR:
-            /* TODO */
+            smf.ids[smf.num_of_id].id = ue.ids[i].id;
+            smf.ids[smf.num_of_id].len = 0;
+            smf.ids[smf.num_of_id].data = 0;
+            smf.num_of_id++;
             break;
         case OGS_PCO_ID_P_CSCF_RE_SELECTION_SUPPORT:
             /* TODO */

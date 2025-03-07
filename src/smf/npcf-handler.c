@@ -344,7 +344,7 @@ bool smf_npcf_smpolicycontrol_handle_create(
         ogs_error("[%s:%d] Invalid URI [%s]",
                 smf_ue->supi, sess->psi, header.uri);
         ogs_sbi_header_free(&header);
-        return OGS_ERROR;
+        return false;
     }
 
     client = ogs_sbi_client_find(scheme, fqdn, fqdn_port, addr, addr6);
@@ -360,7 +360,7 @@ bool smf_npcf_smpolicycontrol_handle_create(
             ogs_freeaddrinfo(addr);
             ogs_freeaddrinfo(addr6);
 
-            return OGS_ERROR;
+            return false;
         }
     }
 
@@ -377,7 +377,7 @@ bool smf_npcf_smpolicycontrol_handle_create(
     /* SBI Features */
     if (SmPolicyDecision->supp_feat) {
         uint64_t supported_features =
-            ogs_uint64_from_string(SmPolicyDecision->supp_feat);
+            ogs_uint64_from_string_hexadecimal(SmPolicyDecision->supp_feat);
         sess->smpolicycontrol_features &= supported_features;
     } else {
         sess->smpolicycontrol_features = 0;
@@ -521,9 +521,11 @@ bool smf_npcf_smpolicycontrol_handle_create(
             &dl_pdr->ue_ip_addr, &dl_pdr->ue_ip_addr_len));
     dl_pdr->ue_ip_addr.sd = OGS_PFCP_UE_IP_DST;
 
-    ogs_assert(OGS_OK ==
-        ogs_pfcp_paa_to_ue_ip_addr(&sess->paa,
-            &ul_pdr->ue_ip_addr, &ul_pdr->ue_ip_addr_len));
+    if (ogs_global_conf()->parameter.use_upg_vpp == true) {
+        ogs_assert(OGS_OK ==
+            ogs_pfcp_paa_to_ue_ip_addr(&sess->paa,
+                &ul_pdr->ue_ip_addr, &ul_pdr->ue_ip_addr_len));
+    }
 
     if (sess->session.ipv4_framed_routes &&
         sess->pfcp_node->up_function_features.frrt) {
@@ -643,14 +645,15 @@ bool smf_npcf_smpolicycontrol_handle_create(
             else
                 sess->upf_n3_teid = ul_pdr->teid;
         } else {
-            if (sess->pfcp_node->addr.ogs_sa_family == AF_INET)
+            ogs_assert(sess->pfcp_node->addr_list);
+            if (sess->pfcp_node->addr_list->ogs_sa_family == AF_INET)
                 ogs_assert(OGS_OK ==
                     ogs_copyaddrinfo(
-                        &sess->upf_n3_addr, &sess->pfcp_node->addr));
-            else if (sess->pfcp_node->addr.ogs_sa_family == AF_INET6)
+                        &sess->upf_n3_addr, sess->pfcp_node->addr_list));
+            else if (sess->pfcp_node->addr_list->ogs_sa_family == AF_INET6)
                 ogs_assert(OGS_OK ==
                     ogs_copyaddrinfo(
-                        &sess->upf_n3_addr6, &sess->pfcp_node->addr));
+                        &sess->upf_n3_addr6, sess->pfcp_node->addr_list));
             else
                 ogs_assert_if_reached();
 
