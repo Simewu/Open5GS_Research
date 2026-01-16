@@ -261,10 +261,18 @@ uint8_t smf_s5c_handle_create_session_request(
     /* Select PGW based on UE Location Information */
     smf_sess_select_upf(sess);
 
+    if (!sess->pfcp_node) {
+        ogs_error("[%s:%s] No UPF available for session",
+                  smf_ue->imsi_bcd, sess->session.name);
+        return OGS_GTP2_CAUSE_SYSTEM_FAILURE;
+    }
+
     /* Check if selected PGW is associated with SMF */
-    ogs_assert(sess->pfcp_node);
-    if (!OGS_FSM_CHECK(&sess->pfcp_node->sm, smf_pfcp_state_associated))
+    if (!OGS_FSM_CHECK(&sess->pfcp_node->sm, smf_pfcp_state_associated)) {
+        ogs_error("[%s:%s] selected UPF is not assocated with SMF",
+                  smf_ue->imsi_bcd, sess->session.name);
         return OGS_GTP2_CAUSE_REMOTE_PEER_NOT_RESPONDING;
+    }
 
     /* UE IP Address */
     paa = req->pdn_address_allocation.data;
@@ -336,8 +344,11 @@ uint8_t smf_s5c_handle_create_session_request(
 
         decoded = ogs_gtp2_parse_bearer_qos(&bearer_qos,
                 &req->bearer_contexts_to_be_created[i].bearer_level_qos);
-        ogs_assert(decoded ==
-                req->bearer_contexts_to_be_created[i].bearer_level_qos.len);
+        if (GTP2_BEARER_QOS_LEN != decoded) {
+            ogs_error("Invalid Bearer QoS IE in Create Session Request "
+                    "(decoded=%d, expected=%d)", decoded, GTP2_BEARER_QOS_LEN);
+            return OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+        }
 
         bearer = smf_bearer_add(sess);
         ogs_assert(bearer);
@@ -885,7 +896,8 @@ void smf_s5c_handle_create_bearer_response(
 
     ogs_assert(OGS_OK ==
         smf_epc_pfcp_send_one_bearer_modification_request(
-            bearer, OGS_INVALID_POOL_ID, OGS_PFCP_MODIFY_ACTIVATE,
+            bearer, OGS_INVALID_POOL_ID,
+            OGS_PFCP_MODIFY_DL_ONLY|OGS_PFCP_MODIFY_ACTIVATE,
             OGS_NAS_PROCEDURE_TRANSACTION_IDENTITY_UNASSIGNED,
             OGS_GTP2_CAUSE_UNDEFINED_VALUE));
 }
@@ -1479,7 +1491,15 @@ void smf_s5c_handle_bearer_resource_command(
 
         decoded = ogs_gtp2_parse_flow_qos(
                 &flow_qos, &cmd->flow_quality_of_service);
-        ogs_assert(cmd->flow_quality_of_service.len == decoded);
+        if (GTP2_FLOW_QOS_LEN != decoded) {
+            ogs_error("Invalid Flow QoS IE length (decoded=%d, ie_len=%u)",
+                      decoded, GTP2_FLOW_QOS_LEN);
+            ogs_gtp2_send_error_message(
+                    xact, get_sender_f_teid(sess, sender_f_teid),
+                    OGS_GTP2_BEARER_RESOURCE_FAILURE_INDICATION_TYPE,
+                    OGS_GTP2_CAUSE_INVALID_MESSAGE_FORMAT);
+            return;
+        }
 
         bearer->qos.mbr.uplink = flow_qos.ul_mbr;
         bearer->qos.mbr.downlink = flow_qos.dl_mbr;

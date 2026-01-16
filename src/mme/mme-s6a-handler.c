@@ -63,8 +63,12 @@ uint8_t mme_s6a_handle_aia(
 
     CLEAR_MME_UE_TIMER(mme_ue->t3460);
 
-    if (mme_ue->nas_eps.ksi == OGS_NAS_KSI_NO_KEY_IS_AVAILABLE)
-        mme_ue->nas_eps.ksi = 0;
+    if (mme_ue->nas_eps.mme.ksi < (OGS_NAS_KSI_NO_KEY_IS_AVAILABLE - 1))
+        mme_ue->nas_eps.mme.ksi++;
+    else
+        mme_ue->nas_eps.mme.ksi = 0;
+
+    mme_ue->nas_eps.ue.ksi = mme_ue->nas_eps.mme.ksi;
 
     return OGS_NAS_EMM_CAUSE_REQUEST_ACCEPTED;
 }
@@ -123,6 +127,10 @@ uint8_t mme_s6a_handle_ula(
             return OGS_NAS_EMM_CAUSE_NO_EPS_BEARER_CONTEXT_ACTIVATED;
         }
 
+        /* Determine S1AP procedure and store it for reuse */
+        mme_ue->tracking_area_update_accept_proc =
+            S1AP_ProcedureCode_id_InitialContextSetup;
+
         /* Update CSMAP from Tracking area update request */
         mme_ue->csmap = mme_csmap_find_by_tai(&mme_ue->tai);
         if (mme_ue->csmap &&
@@ -133,13 +141,12 @@ uint8_t mme_s6a_handle_ula(
              mme_ue->nas_eps.update.value ==
              OGS_NAS_EPS_UPDATE_TYPE_COMBINED_TA_LA_UPDATING_WITH_IMSI_ATTACH)) {
 
-            mme_ue->tracking_area_update_request_type =
-                MME_TAU_TYPE_UNPROTECTED_INGERITY;
             ogs_assert(OGS_OK == sgsap_send_location_update_request(mme_ue));
 
         } else {
+            ogs_info("[%s] TAU accept(Diameter ULA)", mme_ue->imsi_bcd);
             r = nas_eps_send_tau_accept(mme_ue,
-                    S1AP_ProcedureCode_id_InitialContextSetup);
+                    mme_ue->tracking_area_update_accept_proc);
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
         }
@@ -273,7 +280,7 @@ void mme_s6a_handle_clr(mme_ue_t *mme_ue, ogs_diam_s6a_message_t *s6a_message)
     ogs_debug("    OGS_NAS_EPS TYPE[%d]", mme_ue->nas_eps.type);
 
     switch (clr_message->cancellation_type) {
-    case OGS_DIAM_S6A_CT_SUBSCRIPTION_WITHDRAWL:
+    case OGS_DIAM_S6A_CT_SUBSCRIPTION_WITHDRAWAL:
         mme_ue->detach_type = MME_DETACH_TYPE_HSS_EXPLICIT;
 
         /*
@@ -399,7 +406,7 @@ static uint8_t emm_cause_from_diameter(
     if (dia_exp_err) {
         switch (*dia_exp_err) {
         case OGS_DIAM_S6A_ERROR_USER_UNKNOWN:                   /* 5001 */
-            return OGS_NAS_EMM_CAUSE_PLMN_NOT_ALLOWED;
+            return OGS_NAS_EMM_CAUSE_EPS_SERVICES_AND_NON_EPS_SERVICES_NOT_ALLOWED;
         case OGS_DIAM_S6A_ERROR_UNKNOWN_EPS_SUBSCRIPTION:       /* 5420 */
             /* FIXME: Error diagnostic? */
             return OGS_NAS_EMM_CAUSE_NO_SUITABLE_CELLS_IN_TRACKING_AREA;

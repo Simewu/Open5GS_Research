@@ -21,6 +21,11 @@
 #include "ngap-path.h"
 #include "metrics.h"
 
+#include "ogs-metrics.h"
+#include "metrics/prometheus/json_pager.h"
+#include "gnb-info.h"
+#include "ue-info.h"
+
 static ogs_thread_t *thread;
 static void amf_main(void *data);
 static int initialized = 0;
@@ -56,6 +61,10 @@ int amf_initialize(void)
 
     ogs_metrics_context_open(ogs_metrics_self());
 
+    /* dumpers /gnb-info /ue-info */
+    ogs_metrics_register_custom_ep(amf_dump_gnb_info, "/gnb-info");
+    ogs_metrics_register_custom_ep(amf_dump_ue_info, "/ue-info");
+
     rv = amf_sbi_open();
     if (rv != OGS_OK) return rv;
 
@@ -76,7 +85,7 @@ static void event_termination(void)
 {
     ogs_sbi_nf_instance_t *nf_instance = NULL;
 
-    /* Sending NF Instance De-registeration to NRF */
+    /* Sending NF Instance De-registration to NRF */
     ogs_list_for_each(&ogs_sbi_self()->nf_instance_list, nf_instance)
         ogs_sbi_nf_fsm_fini(nf_instance);
 
@@ -128,7 +137,7 @@ static void amf_main(void *data)
         /*
          * After ogs_pollset_poll(), ogs_timer_mgr_expire() must be called.
          *
-         * The reason is why ogs_timer_mgr_next() can get the corrent value
+         * The reason is why ogs_timer_mgr_next() can get the current value
          * when ogs_timer_stop() is called internally in ogs_timer_mgr_expire().
          *
          * You should not use event-queue before ogs_timer_mgr_expire().

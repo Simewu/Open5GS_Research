@@ -19,9 +19,60 @@
 
 #include "ngap-build.h"
 
-ogs_pkbuf_t *ngap_build_ng_setup_response(void)
+static void ngap_build_plmn_support_list(NGAP_PLMNSupportList_t *PLMNSupportList)
 {
     int i, j;
+
+    ogs_assert(PLMNSupportList);
+
+    for (i = 0; i < amf_self()->num_of_plmn_support; i++) {
+        NGAP_PLMNSupportItem_t *NGAP_PLMNSupportItem = NULL;
+        NGAP_PLMNIdentity_t *pLMNIdentity = NULL;
+        NGAP_SliceSupportList_t *sliceSupportList = NULL;
+
+        /* Skip PLMNs with no S-NSSAIs (invalid NGAP configuration) */
+        if (amf_self()->plmn_support[i].num_of_s_nssai == 0) {
+            ogs_warn("Skipping PLMN at index %d with no S-NSSAIs", i);
+            continue;
+        }
+
+        NGAP_PLMNSupportItem = (NGAP_PLMNSupportItem_t *)
+                CALLOC(1, sizeof(NGAP_PLMNSupportItem_t));
+        pLMNIdentity = &NGAP_PLMNSupportItem->pLMNIdentity;
+        sliceSupportList = &NGAP_PLMNSupportItem->sliceSupportList;
+
+        ogs_asn_buffer_to_OCTET_STRING(
+                &amf_self()->plmn_support[i].plmn_id,
+                OGS_PLMN_ID_LEN, pLMNIdentity);
+        for (j = 0; j < amf_self()->plmn_support[i].num_of_s_nssai; j++) {
+            NGAP_SliceSupportItem_t *NGAP_SliceSupportItem = NULL;
+            NGAP_S_NSSAI_t *s_NSSAI = NULL;
+            NGAP_SST_t *sST = NULL;
+
+            NGAP_SliceSupportItem = (NGAP_SliceSupportItem_t *)
+                    CALLOC(1, sizeof(NGAP_SliceSupportItem_t));
+            s_NSSAI = &NGAP_SliceSupportItem->s_NSSAI;
+            sST = &s_NSSAI->sST;
+
+            ogs_asn_uint8_to_OCTET_STRING(
+                amf_self()->plmn_support[i].s_nssai[j].sst, sST);
+            if (amf_self()->plmn_support[i].s_nssai[j].sd.v !=
+                    OGS_S_NSSAI_NO_SD_VALUE) {
+                s_NSSAI->sD = CALLOC(1, sizeof(NGAP_SD_t));
+                ogs_asn_uint24_to_OCTET_STRING(
+                    amf_self()->plmn_support[i].s_nssai[j].sd, s_NSSAI->sD);
+            }
+
+            ASN_SEQUENCE_ADD(&sliceSupportList->list, NGAP_SliceSupportItem);
+        }
+
+        ASN_SEQUENCE_ADD(&PLMNSupportList->list, NGAP_PLMNSupportItem);
+    }
+}
+
+ogs_pkbuf_t *ngap_build_ng_setup_response(void)
+{
+    int i;
 
     NGAP_NGAP_PDU_t pdu;
     NGAP_SuccessfulOutcome_t *successfulOutcome = NULL;
@@ -121,43 +172,7 @@ ogs_pkbuf_t *ngap_build_ng_setup_response(void)
 
     *RelativeAMFCapacity = amf_self()->relative_capacity;
 
-    for (i = 0; i < amf_self()->num_of_plmn_support; i++) {
-        NGAP_PLMNSupportItem_t *NGAP_PLMNSupportItem = NULL;
-        NGAP_PLMNIdentity_t *pLMNIdentity = NULL;
-        NGAP_SliceSupportList_t *sliceSupportList = NULL;
-
-        NGAP_PLMNSupportItem = (NGAP_PLMNSupportItem_t *)
-                CALLOC(1, sizeof(NGAP_PLMNSupportItem_t));
-        pLMNIdentity = &NGAP_PLMNSupportItem->pLMNIdentity;
-        sliceSupportList = &NGAP_PLMNSupportItem->sliceSupportList;
-
-        ogs_asn_buffer_to_OCTET_STRING(
-                &amf_self()->plmn_support[i].plmn_id,
-                OGS_PLMN_ID_LEN, pLMNIdentity);
-        for (j = 0; j < amf_self()->plmn_support[i].num_of_s_nssai; j++) {
-            NGAP_SliceSupportItem_t *NGAP_SliceSupportItem = NULL;
-            NGAP_S_NSSAI_t *s_NSSAI = NULL;
-            NGAP_SST_t *sST = NULL;
-
-            NGAP_SliceSupportItem = (NGAP_SliceSupportItem_t *)
-                    CALLOC(1, sizeof(NGAP_SliceSupportItem_t));
-            s_NSSAI = &NGAP_SliceSupportItem->s_NSSAI;
-            sST = &s_NSSAI->sST;
-
-            ogs_asn_uint8_to_OCTET_STRING(
-                amf_self()->plmn_support[i].s_nssai[j].sst, sST);
-            if (amf_self()->plmn_support[i].s_nssai[j].sd.v !=
-                    OGS_S_NSSAI_NO_SD_VALUE) {
-                s_NSSAI->sD = CALLOC(1, sizeof(NGAP_SD_t));
-                ogs_asn_uint24_to_OCTET_STRING(
-                    amf_self()->plmn_support[i].s_nssai[j].sd, s_NSSAI->sD);
-            }
-
-            ASN_SEQUENCE_ADD(&sliceSupportList->list, NGAP_SliceSupportItem);
-        }
-
-        ASN_SEQUENCE_ADD(&PLMNSupportList->list, NGAP_PLMNSupportItem);
-    }
+    ngap_build_plmn_support_list(PLMNSupportList);
 
     return ogs_ngap_encode(&pdu);
 }
@@ -171,7 +186,6 @@ ogs_pkbuf_t *ngap_build_ng_setup_failure(
 
     NGAP_NGSetupFailureIEs_t *ie = NULL;
     NGAP_Cause_t *Cause = NULL;
-    NGAP_TimeToWait_t *TimeToWait = NULL;
 
     ogs_debug("    Group[%d] Cause[%d] TimeToWait[%ld]",
             group, (int)cause, time_to_wait);
@@ -189,17 +203,6 @@ ogs_pkbuf_t *ngap_build_ng_setup_failure(
 
     NGSetupFailure = &unsuccessfulOutcome->value.choice.NGSetupFailure;
 
-    if (time_to_wait > -1) {
-        ie = CALLOC(1, sizeof(NGAP_NGSetupFailureIEs_t));
-        ASN_SEQUENCE_ADD(&NGSetupFailure->protocolIEs, ie);
-
-        ie->id = NGAP_ProtocolIE_ID_id_TimeToWait;
-        ie->criticality = NGAP_Criticality_ignore;
-        ie->value.present = NGAP_NGSetupFailureIEs__value_PR_TimeToWait;
-
-        TimeToWait = &ie->value.choice.TimeToWait;
-    }
-
     ie = CALLOC(1, sizeof(NGAP_NGSetupFailureIEs_t));
     ASN_SEQUENCE_ADD(&NGSetupFailure->protocolIEs, ie);
 
@@ -211,8 +214,72 @@ ogs_pkbuf_t *ngap_build_ng_setup_failure(
     Cause->present = group;
     Cause->choice.radioNetwork = cause;
 
-    if (TimeToWait)
-        *TimeToWait = time_to_wait;
+    if (time_to_wait > -1) {
+        ie = CALLOC(1, sizeof(NGAP_NGSetupFailureIEs_t));
+        ASN_SEQUENCE_ADD(&NGSetupFailure->protocolIEs, ie);
+
+        ie->id = NGAP_ProtocolIE_ID_id_TimeToWait;
+        ie->criticality = NGAP_Criticality_ignore;
+        ie->value.present = NGAP_NGSetupFailureIEs__value_PR_TimeToWait;
+
+        ie->value.choice.TimeToWait = time_to_wait;
+    }
+
+    return ogs_ngap_encode(&pdu);
+}
+
+ogs_pkbuf_t *ngap_build_amf_configuration_update(void)
+{
+    int i, num_plmn = 0;
+    NGAP_NGAP_PDU_t pdu;
+    NGAP_InitiatingMessage_t *initiatingMessage = NULL;
+    NGAP_AMFConfigurationUpdate_t *AMFConfigurationUpdate = NULL;
+
+    NGAP_AMFConfigurationUpdateIEs_t *ie = NULL;
+    NGAP_PLMNSupportList_t *PLMNSupportList = NULL;
+
+    ogs_debug("AMFConfigurationUpdate");
+
+    /* Count valid PLMNs (those with at least one S-NSSAI) */
+    for (i = 0; i < amf_self()->num_of_plmn_support; i++) {
+        if (amf_self()->plmn_support[i].num_of_s_nssai > 0) {
+            num_plmn++;
+        }
+    }
+
+    /*
+     * Build message even without PLMNs to notify gNBs
+     * If no PLMNs, the PLMNSupportList IE is omitted
+     */
+    if (num_plmn == 0) {
+        ogs_warn("Building AMF Configuration Update with no PLMNs (gNBs will be notified)");
+    }
+
+    memset(&pdu, 0, sizeof(NGAP_NGAP_PDU_t));
+    pdu.present = NGAP_NGAP_PDU_PR_initiatingMessage;
+    pdu.choice.initiatingMessage =
+        CALLOC(1, sizeof(NGAP_InitiatingMessage_t));
+
+    initiatingMessage = pdu.choice.initiatingMessage;
+    initiatingMessage->procedureCode = NGAP_ProcedureCode_id_AMFConfigurationUpdate;
+    initiatingMessage->criticality = NGAP_Criticality_reject;
+    initiatingMessage->value.present = NGAP_InitiatingMessage__value_PR_AMFConfigurationUpdate;
+
+    AMFConfigurationUpdate = &initiatingMessage->value.choice.AMFConfigurationUpdate;
+
+    /* Only add PLMNSupportList IE if there are PLMNs */
+    if (num_plmn > 0) {
+        ie = CALLOC(1, sizeof(NGAP_AMFConfigurationUpdateIEs_t));
+        ASN_SEQUENCE_ADD(&AMFConfigurationUpdate->protocolIEs, ie);
+
+        ie->id = NGAP_ProtocolIE_ID_id_PLMNSupportList;
+        ie->criticality = NGAP_Criticality_reject;
+        ie->value.present =
+            NGAP_AMFConfigurationUpdateIEs__value_PR_PLMNSupportList;
+
+        PLMNSupportList = &ie->value.choice.PLMNSupportList;
+        ngap_build_plmn_support_list(PLMNSupportList);
+    }
 
     return ogs_ngap_encode(&pdu);
 }
@@ -297,10 +364,9 @@ ogs_pkbuf_t *ngap_build_ran_configuration_update_failure(
 }
 
 ogs_pkbuf_t *ngap_build_downlink_nas_transport(
-    ran_ue_t *ran_ue, ogs_pkbuf_t *gmmbuf, bool ue_ambr, bool allowed_nssai)
+    ran_ue_t *ran_ue, amf_ue_t *amf_ue,
+    ogs_pkbuf_t *gmmbuf, bool ue_ambr, bool allowed_nssai)
 {
-    amf_ue_t *amf_ue = NULL;
-
     NGAP_NGAP_PDU_t pdu;
     NGAP_InitiatingMessage_t *initiatingMessage = NULL;
     NGAP_DownlinkNASTransport_t *DownlinkNASTransport = NULL;
@@ -314,7 +380,6 @@ ogs_pkbuf_t *ngap_build_downlink_nas_transport(
 
     ogs_assert(gmmbuf);
     ogs_assert(ran_ue);
-    amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
     ogs_assert(amf_ue);
 
     ogs_debug("DownlinkNASTransport");
@@ -830,10 +895,14 @@ ogs_pkbuf_t *ngap_build_ue_context_modification_request(amf_ue_t *amf_ue)
 
     asn_uint642INTEGER(
             &UEAggregateMaximumBitRate->uEAggregateMaximumBitRateUL,
-            amf_ue->ue_ambr.uplink == 0 ? MAX_BIT_RATE : amf_ue->ue_ambr.uplink);
+            (amf_ue->ue_ambr.uplink == 0 ||
+             amf_ue->ue_ambr.uplink > OGS_MAX_BITRATE_NGAP) ?
+                OGS_MAX_BITRATE_NGAP : amf_ue->ue_ambr.uplink);
     asn_uint642INTEGER(
             &UEAggregateMaximumBitRate->uEAggregateMaximumBitRateDL,
-            amf_ue->ue_ambr.downlink == 0 ? MAX_BIT_RATE : amf_ue->ue_ambr.downlink);
+            (amf_ue->ue_ambr.downlink == 0 ||
+             amf_ue->ue_ambr.downlink > OGS_MAX_BITRATE_NGAP) ?
+                OGS_MAX_BITRATE_NGAP : amf_ue->ue_ambr.downlink);
 
     ran_ue->ue_ambr_sent = true;
 
@@ -1259,7 +1328,7 @@ ogs_pkbuf_t *ngap_build_ue_context_release_command(
                 &UE_NGAP_IDs->choice.aMF_UE_NGAP_ID, ran_ue->amf_ue_ngap_id);
     } else {
         UE_NGAP_IDs->present = NGAP_UE_NGAP_IDs_PR_uE_NGAP_ID_pair;
-        UE_NGAP_IDs->choice.uE_NGAP_ID_pair = 
+        UE_NGAP_IDs->choice.uE_NGAP_ID_pair =
             CALLOC(1, sizeof(NGAP_UE_NGAP_ID_pair_t));
         asn_uint642INTEGER(
             &UE_NGAP_IDs->choice.uE_NGAP_ID_pair->aMF_UE_NGAP_ID,

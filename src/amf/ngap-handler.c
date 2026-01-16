@@ -183,6 +183,18 @@ void ngap_handle_ng_setup_request(amf_gnb_t *gnb, ogs_ngap_message_t *message)
         return;
     }
 
+    if (globalGNB_ID->pLMNIdentity.size != sizeof(gnb->plmn_id)) {
+        ogs_error("Invalid PLMNIdentity size = %d (expected %d)",
+                (int)globalGNB_ID->pLMNIdentity.size,
+                (int)sizeof(gnb->plmn_id));
+        group = NGAP_Cause_PR_protocol;
+        cause = NGAP_CauseProtocol_semantic_error;
+        r = ngap_send_ng_setup_failure(gnb, group, cause);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+
     if (!SupportedTAList) {
         ogs_error("No SupportedTAList");
         group = NGAP_Cause_PR_protocol;
@@ -273,6 +285,18 @@ void ngap_handle_ng_setup_request(amf_gnb_t *gnb, ogs_ngap_message_t *message)
             pLMNIdentity = (NGAP_PLMNIdentity_t *)
                     &BroadcastPLMNItem->pLMNIdentity;
             ogs_assert(pLMNIdentity);
+
+            if (pLMNIdentity->size != sizeof(ogs_plmn_id_t)) {
+                ogs_error("Invalid PLMNIdentity size = %d (expected %d)",
+                        (int)pLMNIdentity->size,
+                        (int)sizeof(ogs_plmn_id_t));
+                group = NGAP_Cause_PR_protocol;
+                cause = NGAP_CauseProtocol_semantic_error;
+                r = ngap_send_ng_setup_failure(gnb, group, cause);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
+                return;
+            }
 
             memcpy(&gnb->supported_ta_list[i].bplmn_list[j].plmn_id,
                     pLMNIdentity->buf, sizeof(ogs_plmn_id_t));
@@ -1755,12 +1779,6 @@ void ngap_handle_ue_context_release_action(ran_ue_t *ran_ue)
         break;
     case NGAP_UE_CTX_REL_NG_REMOVE_AND_UNLINK:
         ogs_debug("    Action: NG normal release");
-        ran_ue_remove(ran_ue);
-        if (!amf_ue) {
-            ogs_error("No UE(amf-ue) Context");
-            return;
-        }
-        amf_ue_deassociate(amf_ue);
 
         /*
          * When AMF release the NAS signalling connection,
@@ -1789,9 +1807,14 @@ void ngap_handle_ue_context_release_action(ran_ue_t *ran_ue)
          * TODO: If the UE is registered for emergency services, the AMF shall
          * set the mobile reachable timer with a value equal to timer T3512.
          */
-        ogs_timer_start(amf_ue->mobile_reachable.timer,
-                ogs_time_from_sec(amf_self()->time.t3512.value + 240));
+        if (amf_ue) {
+            amf_ue_deassociate_ran_ue(amf_ue, ran_ue);
+            ogs_timer_start(amf_ue->mobile_reachable.timer,
+                    ogs_time_from_sec(amf_self()->time.t3512.value + 240));
+        } else
+            ogs_error("No UE(amf-ue) Context");
 
+        ran_ue_remove(ran_ue);
         break;
 
     case NGAP_UE_CTX_REL_UE_CONTEXT_REMOVE:
@@ -2921,6 +2944,56 @@ void ngap_handle_path_switch_request(
     eUTRAintegrityProtectionAlgorithms =
         &UESecurityCapabilities->eUTRAintegrityProtectionAlgorithms;
 
+    if (nRencryptionAlgorithms->size != sizeof(nr_ea)) {
+        ogs_error("Invalid nRencryptionAlgorithms->size = %d (expected %d)",
+                (int)nRencryptionAlgorithms->size,
+                (int)sizeof(nr_ea));
+        r = ngap_send_error_indication(
+                gnb, &ran_ue->ran_ue_ngap_id, &ran_ue->amf_ue_ngap_id,
+                NGAP_Cause_PR_protocol,
+                NGAP_CauseProtocol_message_not_compatible_with_receiver_state);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+    if (nRintegrityProtectionAlgorithms->size != sizeof(nr_ia)) {
+        ogs_error("Invalid nRintegrityProtectionAlgorithms->size = %d "
+                "(expected %d)",
+                (int)nRintegrityProtectionAlgorithms->size,
+                (int)sizeof(nr_ia));
+        r = ngap_send_error_indication(
+                gnb, &ran_ue->ran_ue_ngap_id, &ran_ue->amf_ue_ngap_id,
+                NGAP_Cause_PR_protocol,
+                NGAP_CauseProtocol_message_not_compatible_with_receiver_state);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+    if (eUTRAencryptionAlgorithms->size != sizeof(eutra_ea)) {
+        ogs_error("Invalid eUTRAencryptionAlgorithms->size = %d (expected %d)",
+                (int)eUTRAencryptionAlgorithms->size,
+                (int)sizeof(eutra_ea));
+        r = ngap_send_error_indication(
+                gnb, &ran_ue->ran_ue_ngap_id, &ran_ue->amf_ue_ngap_id,
+                NGAP_Cause_PR_protocol,
+                NGAP_CauseProtocol_message_not_compatible_with_receiver_state);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
+    if (eUTRAintegrityProtectionAlgorithms->size != sizeof(eutra_ia)) {
+        ogs_error("Invalid eUTRAintegrityProtectionAlgorithms->size = %d "
+                "(expected %d)",
+                (int)eUTRAintegrityProtectionAlgorithms->size,
+                (int)sizeof(eutra_ia));
+        r = ngap_send_error_indication(
+                gnb, &ran_ue->ran_ue_ngap_id, &ran_ue->amf_ue_ngap_id,
+                NGAP_Cause_PR_protocol,
+                NGAP_CauseProtocol_message_not_compatible_with_receiver_state);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        return;
+    }
     memcpy(&nr_ea, nRencryptionAlgorithms->buf, sizeof(nr_ea));
     nr_ea = be16toh(nr_ea);
     nr_ea0 = amf_ue->ue_security_capability.nr_ea0;
@@ -4054,6 +4127,7 @@ void ngap_handle_handover_notification(
 {
     char buf[OGS_ADDRSTRLEN];
     int i, r;
+    int xact_count;
 
     amf_ue_t *amf_ue = NULL;
     amf_sess_t *sess = NULL;
@@ -4213,15 +4287,14 @@ void ngap_handle_handover_notification(
     ogs_expect(r == OGS_OK);
     ogs_assert(r != OGS_ERROR);
 
+    /* Save the number of ongoing SMF transactions before processing sessions */
+    xact_count = amf_sess_xact_count(amf_ue);
+
     ogs_list_for_each(&amf_ue->sess_list, sess) {
         if (!SESSION_CONTEXT_IN_SMF(sess)) {
-            ogs_error("Session Context is not in SMF [%d]", sess->psi);
-            r = ngap_send_error_indication2(source_ue,
-                    NGAP_Cause_PR_radioNetwork,
-                    NGAP_CauseRadioNetwork_partial_handover);
-            ogs_expect(r == OGS_OK);
-            ogs_assert(r != OGS_ERROR);
-            return;
+            /* Warn if this UE session is not handled by SMF and skip it */
+            ogs_warn("Session Context is not in SMF [%d]", sess->psi);
+            continue;
         }
 
         memset(&param, 0, sizeof(param));
@@ -4231,6 +4304,19 @@ void ngap_handle_handover_notification(
                 OGS_SBI_SERVICE_TYPE_NSMF_PDUSESSION, NULL,
                 amf_nsmf_pdusession_build_update_sm_context,
                 source_ue, sess, AMF_UPDATE_SM_CONTEXT_HANDOVER_NOTIFY, &param);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+    }
+
+    /*
+     * If no SMF sessions were processed (transaction count unchanged),
+     * send partial-handover error
+     */
+    if (xact_count == amf_sess_xact_count(amf_ue)) {
+        ogs_error("No SMF sessions were processed");
+        r = ngap_send_error_indication2(source_ue,
+                NGAP_Cause_PR_radioNetwork,
+                NGAP_CauseRadioNetwork_partial_handover);
         ogs_expect(r == OGS_OK);
         ogs_assert(r != OGS_ERROR);
     }
@@ -4375,6 +4461,19 @@ void ngap_handle_ran_configuration_update(
                 pLMNIdentity = (NGAP_PLMNIdentity_t *)
                         &BroadcastPLMNItem->pLMNIdentity;
                 ogs_assert(pLMNIdentity);
+
+                if (pLMNIdentity->size != sizeof(ogs_plmn_id_t)) {
+                    ogs_error("Invalid PLMNIdentity size = %d (expected %d)",
+                            (int)pLMNIdentity->size,
+                            (int)sizeof(ogs_plmn_id_t));
+                    group = NGAP_Cause_PR_protocol;
+                    cause = NGAP_CauseProtocol_semantic_error;
+                    r = ngap_send_ran_configuration_update_failure(
+                            gnb, group, cause);
+                    ogs_expect(r == OGS_OK);
+                    ogs_assert(r != OGS_ERROR);
+                    return;
+                }
 
                 memcpy(&gnb->supported_ta_list[i].bplmn_list[j].plmn_id,
                         pLMNIdentity->buf, sizeof(ogs_plmn_id_t));

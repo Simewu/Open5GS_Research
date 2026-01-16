@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2025 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -100,6 +100,8 @@ typedef struct mme_context_s {
     ogs_list_t      csmap_list;     /* TAI-LAI Map List */
     ogs_list_t      hssmap_list;    /* PLMN HSS Map List */
 
+    ogs_list_t      emerg_list;     /* Emergency number list */
+
     /* Served GUMME */
     int             num_of_served_gummei;
     served_gummei_t served_gummei[OGS_MAX_NUM_OF_SERVED_GUMMEI];
@@ -163,6 +165,10 @@ typedef struct mme_context_s {
             ogs_time_t value;       /* Timer Value(Seconds) */
         } t3402, t3412, t3423;
     } time;
+
+    struct {
+        const char *dnn;            /* Emergency APN */
+    } emergency;
 } mme_context_t;
 
 typedef struct mme_sgsn_route_s {
@@ -267,6 +273,15 @@ typedef struct mme_enb_s {
 
 } mme_enb_t;
 
+typedef struct mme_emerg_s {
+    ogs_lnode_t     lnode;
+    ogs_pool_id_t   id;
+
+    uint8_t         categories; /* Service categories */
+    const char      *digits;    /* Emergency number */
+
+} mme_emerg_t;
+
 struct enb_ue_s {
     ogs_lnode_t     lnode;
     ogs_pool_id_t   id;
@@ -342,6 +357,69 @@ struct sgw_ue_s {
     ogs_pool_id_t mme_ue_id;
 };
 
+typedef struct mme_ue_memento_s {
+    /* UE network capability info: supported network features. */
+    ogs_nas_ue_network_capability_t ue_network_capability;
+    /* MS network capability info: supported network features. */
+    ogs_nas_ms_network_capability_t ms_network_capability;
+    /* UE additional security capability: extra security features. */
+    ogs_nas_ue_additional_security_capability_t
+        ue_additional_security_capability;
+
+    /* Expected response and its length */
+    uint8_t xres[OGS_MAX_RES_LEN];
+    uint8_t xres_len;
+    /* Derived key from HSS */
+    uint8_t kasme[OGS_SHA256_DIGEST_SIZE];
+    /* Random challenge value */
+    uint8_t rand[OGS_RAND_LEN];
+    /* Authentication token */
+    uint8_t autn[OGS_AUTN_LEN];
+    /* Integrity and ciphering keys */
+    uint8_t knas_int[OGS_SHA256_DIGEST_SIZE/2];
+    uint8_t knas_enc[OGS_SHA256_DIGEST_SIZE/2];
+    /* Downlink counter */
+    uint32_t dl_count;
+    /* Uplink counter (24-bit stored in uint32_t) */
+    uint32_t ul_count;
+    /* eNB key derived from kasme */
+    uint8_t kenb[OGS_SHA256_DIGEST_SIZE];
+    /* Hash used for NAS message integrity */
+    uint8_t hash_mme[OGS_HASH_MME_LEN];
+    /* Nonces for resynchronization */
+    uint32_t nonceue;
+    uint32_t noncemme;
+    /* GPRS ciphering key sequence number */
+    uint8_t gprs_ciphering_key_sequence_number;
+
+    /*
+     * Next Hop Channing Counter
+     *
+     * Note that the "nhcc" field is not included in the backup
+     * because it is a transient counter used only during next-hop key
+     * derivation. In our design, only the persistent keying material
+     * and related values that are required to recreate the security context
+     * are backed up. The nhcc value is recalculated or updated dynamically
+     * when the next hop key is derived (e.g. via ogs_kdf_nh_enb()),
+     * so it is not necessary to store it in the backup.
+     *
+     * If there is a requirement to preserve the exact nhcc value across state
+     * transitions, you could add it to the backup structure, but typically
+     * it is treated as a computed, temporary value that can be reinitialized
+     * safely without compromising the security context.
+     * struct {
+     *   ED2(uint8_t nhcc_spare:5;,
+     *       uint8_t nhcc:3;)
+     * };
+     */
+
+    /* Next hop key */
+    uint8_t nh[OGS_SHA256_DIGEST_SIZE];
+    /* Selected algorithms (set by HSS/subscription) */
+    uint8_t selected_enc_algorithm;
+    uint8_t selected_int_algorithm;
+} mme_ue_memento_t;
+
 struct mme_ue_s {
     ogs_lnode_t     lnode;
     ogs_pool_id_t   id;
@@ -355,17 +433,23 @@ struct mme_ue_s {
 #define MME_EPS_TYPE_DETACH_REQUEST_FROM_UE         5
 #define MME_EPS_TYPE_DETACH_REQUEST_TO_UE           6
         uint8_t     type;
-        uint8_t     ksi;
+
+        struct {
+        ED3(uint8_t tsc:1;,
+            uint8_t ksi:3;,
+            uint8_t spare:4;)
+        } mme, ue;
+
         ogs_nas_eps_attach_type_t attach;
         ogs_nas_eps_update_type_t update;
         ogs_nas_service_type_t service;
         ogs_nas_detach_type_t detach;
     } nas_eps;
 
-#define MME_TAU_TYPE_INITIAL_UE_MESSAGE    1
-#define MME_TAU_TYPE_UPLINK_NAS_TRANPORT   2
-#define MME_TAU_TYPE_UNPROTECTED_INGERITY  3
-    uint8_t tracking_area_update_request_type;
+    uint64_t tracking_area_update_request_presencemask;
+    uint16_t tracking_area_update_request_ebcs_value;
+    S1AP_ProcedureCode_t tracking_area_update_accept_proc;
+
 
     /* 1. MME initiated detach request to the UE.
      *    (nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE)
@@ -446,30 +530,45 @@ struct mme_ue_s {
     ((__mME) && \
     ((__mME)->security_context_available == 1) && \
      ((__mME)->mac_failed == 0) && \
-     ((__mME)->nas_eps.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
+     ((__mME)->nas_eps.ue.ksi != OGS_NAS_KSI_NO_KEY_IS_AVAILABLE))
 #define CLEAR_SECURITY_CONTEXT(__mME) \
     do { \
         ogs_assert((__mME)); \
         (__mME)->security_context_available = 0; \
         (__mME)->mac_failed = 0; \
-        (__mME)->nas_eps.ksi = 0; \
     } while(0)
     int             security_context_available;
     int             mac_failed;
+
+    /* Authentication synch failure counter */
+    uint8_t auth_synch_fail_count;
+
+    /* flag: 1 = allow restoration of context, 0 = disallow */
+    bool            can_restore_context;
+
+    /* Memento of context fields */
+    mme_ue_memento_t memento;
 
     /* Security Context */
     ogs_nas_ue_network_capability_t ue_network_capability;
     ogs_nas_ms_network_capability_t ms_network_capability;
     ogs_nas_ue_additional_security_capability_t
         ue_additional_security_capability;
+    /* Expected response and its length */
     uint8_t         xres[OGS_MAX_RES_LEN];
     uint8_t         xres_len;
+    /* Derived key from HSS */
     uint8_t         kasme[OGS_SHA256_DIGEST_SIZE];
+    /* Random challenge value */
     uint8_t         rand[OGS_RAND_LEN];
+    /* Authentication token */
     uint8_t         autn[OGS_AUTN_LEN];
+    /* Integrity and ciphering keys */
     uint8_t         knas_int[OGS_SHA256_DIGEST_SIZE/2];
     uint8_t         knas_enc[OGS_SHA256_DIGEST_SIZE/2];
+    /* Downlink counter */
     uint32_t        dl_count;
+    /* Uplink counter (24-bit stored in i32) */
     union {
         struct {
         ED3(uint8_t spare;,
@@ -478,17 +577,23 @@ struct mme_ue_s {
         } __attribute__ ((packed));
         uint32_t i32;
     } ul_count;
+    /* eNB key derived from kasme */
     uint8_t         kenb[OGS_SHA256_DIGEST_SIZE];
+    /* Hash used for NAS message integrity */
     uint8_t         hash_mme[OGS_HASH_MME_LEN];
+    /* Nonces for resynchronization */
     uint32_t        nonceue, noncemme;
+    /* GPRS ciphering key sequence number */
     uint8_t         gprs_ciphering_key_sequence_number;
 
     struct {
     ED2(uint8_t nhcc_spare:5;,
         uint8_t nhcc:3;) /* Next Hop Channing Counter */
     };
-    uint8_t         nh[OGS_SHA256_DIGEST_SIZE]; /* NH Security Key */
+    /* Next hop key */
+    uint8_t         nh[OGS_SHA256_DIGEST_SIZE];
 
+    /* Selected algorithms (set by HSS/subscription) */
     /* defined in 'nas_ies.h'
      * #define NAS_SECURITY_ALGORITHMS_EIA0        0
      * #define NAS_SECURITY_ALGORITHMS_128_EEA1    1
@@ -547,7 +652,7 @@ struct mme_ue_s {
         \
         enb_ue_holding = enb_ue_find_by_id((__mME)->enb_ue_id); \
         if (enb_ue_holding) { \
-            enb_ue_deassociate(enb_ue_holding); \
+            enb_ue_holding->mme_ue_id = OGS_INVALID_POOL_ID; \
             \
             ogs_warn("[%s] Holding S1 Context", (__mME)->imsi_bcd); \
             ogs_warn("[%s]    ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]", \
@@ -712,6 +817,7 @@ struct mme_ue_s {
 
 #define GTP_COUNTER_CREATE_SESSION_BY_PATH_SWITCH               1
 #define GTP_COUNTER_DELETE_SESSION_BY_PATH_SWITCH               2
+#define GTP_COUNTER_DELETE_SESSION_BY_TAU                       3
     struct {
         uint8_t request;
         uint8_t response;
@@ -722,6 +828,15 @@ struct mme_ue_s {
     mme_csmap_t     *csmap;
     mme_hssmap_t    *hssmap;
 };
+
+#define MME_UE_REMOVE_WITH_PAGING_FAIL(__mME) \
+    do { \
+        if (MME_PAGING_ONGOING(__mME)) { \
+            ogs_error("Paging is ON-Going [%d]", (__mME)->paging.type); \
+            mme_send_after_paging(__mME, false); \
+        } \
+        mme_ue_remove(__mME); \
+    } while(0)
 
 #define SESSION_CONTEXT_IS_AVAILABLE(__mME) \
     ((__mME) && \
@@ -1076,14 +1191,12 @@ int mme_ue_xact_count(mme_ue_t *mme_ue, uint8_t org);
  *   - Delete Indirect Data Forwarding Tunnel Request/Response
  */
 void enb_ue_associate_mme_ue(enb_ue_t *enb_ue, mme_ue_t *mme_ue);
-void enb_ue_deassociate(enb_ue_t *enb_ue);
-void enb_ue_unlink(mme_ue_t *mme_ue);
+void enb_ue_deassociate_mme_ue(enb_ue_t *enb_ue, mme_ue_t *mme_ue);
 void enb_ue_source_associate_target(enb_ue_t *source_ue, enb_ue_t *target_ue);
 void enb_ue_source_deassociate_target(enb_ue_t *enb_ue);
 
 void sgw_ue_associate_mme_ue(sgw_ue_t *sgw_ue, mme_ue_t *mme_ue);
-void sgw_ue_deassociate(sgw_ue_t *sgw_ue);
-void sgw_ue_unlink(mme_ue_t *mme_ue);
+void sgw_ue_deassociate_mme_ue(sgw_ue_t *sgw_ue, mme_ue_t *mme_ue);
 void sgw_ue_source_associate_target(sgw_ue_t *source_ue, sgw_ue_t *target_ue);
 void sgw_ue_source_deassociate_target(sgw_ue_t *sgw_ue);
 
@@ -1127,6 +1240,13 @@ void mme_ebi_pool_clear(mme_ue_t *mme_ue);
 
 uint8_t mme_selected_int_algorithm(mme_ue_t *mme_ue);
 uint8_t mme_selected_enc_algorithm(mme_ue_t *mme_ue);
+
+void mme_ue_save_memento(mme_ue_t *mme_ue, mme_ue_memento_t *memento);
+void mme_ue_restore_memento(mme_ue_t *mme_ue, const mme_ue_memento_t *memento);
+
+mme_emerg_t *mme_emerg_add(uint8_t categories, const char *digits);
+void mme_emerg_remove(mme_emerg_t *emerg);
+void mme_emerg_remove_all(void);
 
 #ifdef __cplusplus
 }

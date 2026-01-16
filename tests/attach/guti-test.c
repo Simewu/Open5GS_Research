@@ -56,7 +56,7 @@ static void test1_func(abts_case *tc, void *data)
     ogs_assert(test_ue);
 
     test_ue->e_cgi.cell_id = 0x1079baf0;
-    test_ue->nas.ksi = 0;
+    test_ue->nas.ksi = OGS_NAS_KSI_NO_KEY_IS_AVAILABLE;
     test_ue->nas.value = OGS_NAS_ATTACH_TYPE_COMBINED_EPS_IMSI_ATTACH;
 
     test_ue->k_string = "465b5ce8b199b49faa5f0a2ee238a6bc";
@@ -1065,7 +1065,7 @@ static void test3_func(abts_case *tc, void *data)
     test_ue->tau_request_param.ue_network_capability = 1;
     test_ue->tau_request_param.last_visited_registered_tai = 1;
     test_ue->tau_request_param.drx_parameter = 1;
-    test_ue->tau_request_param.eps_bearer_context_status = 1;
+    test_ue->tau_request_param.eps_bearer_context_status = 0x20; /* EBI:5 */
     test_ue->tau_request_param.ms_network_capability = 1;
     test_ue->tau_request_param.tmsi_status = 1;
     test_ue->tau_request_param.mobile_station_classmark_2 = 1;
@@ -1165,7 +1165,7 @@ static void test3_func(abts_case *tc, void *data)
     test_ue->tau_request_param.ue_network_capability = 1;
     test_ue->tau_request_param.last_visited_registered_tai = 1;
     test_ue->tau_request_param.drx_parameter = 1;
-    test_ue->tau_request_param.eps_bearer_context_status = 1;
+    test_ue->tau_request_param.eps_bearer_context_status = 0x20; /* EBI:5 */
     test_ue->tau_request_param.ms_network_capability = 1;
     test_ue->tau_request_param.tmsi_status = 1;
     test_ue->tau_request_param.mobile_station_classmark_2 = 1;
@@ -1275,7 +1275,7 @@ static void test4_func(abts_case *tc, void *data)
     ogs_assert(test_ue);
 
     test_ue->e_cgi.cell_id = 0x64010;
-    test_ue->nas.ksi = 0;
+    test_ue->nas.ksi = OGS_NAS_KSI_NO_KEY_IS_AVAILABLE;
     test_ue->nas.value = OGS_NAS_ATTACH_TYPE_EPS_ATTACH;
 
     test_ue->k_string = "465b5ce8b199b49faa5f0a2ee238a6bc";

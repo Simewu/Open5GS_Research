@@ -23,6 +23,9 @@
 #include "pfcp-path.h"
 #include "sbi-path.h"
 #include "metrics.h"
+#include "ogs-metrics.h"
+#include "metrics/prometheus/json_pager.h"
+#include "pdu-info.h"
 
 static ogs_thread_t *thread;
 static void smf_main(void *data);
@@ -90,6 +93,9 @@ int smf_initialize(void)
     thread = ogs_thread_create(smf_main, NULL);
     if (!thread) return OGS_ERROR;
 
+    /* dumper /pdu-info */
+    ogs_metrics_register_custom_ep(smf_dump_pdu_info, "/pdu-info");
+
     initialized = 1;
 
     return OGS_OK;
@@ -101,7 +107,7 @@ static void event_termination(void)
 {
     ogs_sbi_nf_instance_t *nf_instance = NULL;
 
-    /* Sending NF Instance De-registeration to NRF */
+    /* Sending NF Instance De-registration to NRF */
     ogs_list_for_each(&ogs_sbi_self()->nf_instance_list, nf_instance)
         ogs_sbi_nf_fsm_fini(nf_instance);
 
@@ -162,7 +168,7 @@ static void smf_main(void *data)
         /*
          * After ogs_pollset_poll(), ogs_timer_mgr_expire() must be called.
          *
-         * The reason is why ogs_timer_mgr_next() can get the corrent value
+         * The reason is why ogs_timer_mgr_next() can get the current value
          * when ogs_timer_stop() is called internally in ogs_timer_mgr_expire().
          *
          * You should not use event-queue before ogs_timer_mgr_expire().

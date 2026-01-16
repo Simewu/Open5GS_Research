@@ -103,6 +103,7 @@ static void test3_func(abts_case *tc, void *data)
 }
 #endif
 
+#if 0
 static void test4_func(abts_case *tc, void *data)
 {
     int rv;
@@ -140,7 +141,7 @@ static void test4_func(abts_case *tc, void *data)
     ogs_assert(test_ue);
 
     test_ue->e_cgi.cell_id = 0x1079baf0;
-    test_ue->nas.ksi = 0;
+    test_ue->nas.ksi = OGS_NAS_KSI_NO_KEY_IS_AVAILABLE;
     test_ue->nas.value = OGS_NAS_ATTACH_TYPE_COMBINED_EPS_IMSI_ATTACH;
 
     test_ue->k_string = "465b5ce8b199b49faa5f0a2ee238a6bc";
@@ -303,7 +304,7 @@ static void test4_func(abts_case *tc, void *data)
     test_ue->tau_request_param.ue_network_capability = 1;
     test_ue->tau_request_param.last_visited_registered_tai = 1;
     test_ue->tau_request_param.drx_parameter = 1;
-    test_ue->tau_request_param.eps_bearer_context_status = 1;
+    test_ue->tau_request_param.ebcs_value = 0x20; /* EBI:5 */
     test_ue->tau_request_param.ms_network_capability = 1;
     test_ue->tau_request_param.tmsi_status = 1;
     test_ue->tau_request_param.mobile_station_classmark_2 = 1;
@@ -405,6 +406,7 @@ static void test4_func(abts_case *tc, void *data)
 
     test_ue_remove(test_ue);
 }
+#endif
 
 static void test5_func(abts_case *tc, void *data)
 {
@@ -449,7 +451,38 @@ abts_suite *test_crash(abts_suite *suite)
 #if 0 /* Commenting to suppress error messages */
     abts_run_test(suite, test3_func, NULL);
 #endif
+
+/*
+Assume the UE has attached, the session has been created, and is in the
+IDLE state with the UEContextRelease process. This may lead to the following
+call flow:
+1. TAU request without integrity protection
+2. Authentication request/response
+3. Security-mode command/complete
+
+The MME may be processed concurrently by the HSS (S6A) and the UE (S1AP)
+as follows:
+   - Update-Location-Request
+   - Service request
+   - Service reject
+   - Delete Session Request
+   - Delete Session Response
+   - Update-Location-Answer
+   - UEContextReleaseCommand for Service reject
+   - TAU reject
+   - UEContextReleaseCommand for TAU reject
+   - UEContextReleaseComplete (for Service reject)
+   - UEContextReleaseComplete (for TAU reject)
+
+If the Update-Location-Answer is received before the Delete Session Response,
+the session still exists, and a TAU accept may be received. This causes the
+test procedure to wait indefinitely. Due to this issue, the test code has
+been commented out.
+*/
+#if 0
     abts_run_test(suite, test4_func, NULL);
+#endif
+
     abts_run_test(suite, test5_func, NULL);
 
     return suite;
